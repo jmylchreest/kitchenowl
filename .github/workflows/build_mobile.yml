@@ -1,0 +1,93 @@
+name: Build Mobile Apps
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kitchenowl/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "kitchenowl/**"
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: Clone Flutter repository with stable channel
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter config --no-analytics
+
+      - run: flutter packages get
+        working-directory: kitchenowl
+
+      - name: Create temporary signing keystore
+        run: |
+          keytool -genkey -v \
+            -keystore app/ci-keystore.jks \
+            -keyalg RSA -keysize 2048 -validity 1 \
+            -alias ci \
+            -storepass changeit -keypass changeit \
+            -dname "CN=CI Build, O=KitchenOwl Fork, C=US"
+          cat > key.properties <<EOF
+          storeFile=ci-keystore.jks
+          keyAlias=ci
+          storePassword=changeit
+          keyPassword=changeit
+          EOF
+        working-directory: kitchenowl/android
+
+      - name: Build APK
+        run: flutter build apk --release
+        working-directory: kitchenowl
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitchenowl-android-apk
+          path: kitchenowl/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+  build-ios:
+    name: Build iOS (unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone Flutter repository with stable channel
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter config --no-analytics
+
+      - run: flutter packages get
+        working-directory: kitchenowl
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+        working-directory: kitchenowl
+
+      - name: Archive iOS build
+        run: |
+          cd kitchenowl/build/ios/iphoneos
+          tar czf "$GITHUB_WORKSPACE/kitchenowl-ios-unsigned.tar.gz" Runner.app
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitchenowl-ios-unsigned
+          path: kitchenowl-ios-unsigned.tar.gz
+          retention-days: 30
