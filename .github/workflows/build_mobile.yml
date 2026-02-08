@@ -114,17 +114,19 @@ jobs:
           name: kitchenowl-ios-unsigned
           path: artifacts/
 
-      - name: Rename artifacts with commit info
+      - name: Rename artifacts with datetime and commit info
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
-          mv artifacts/app-release.apk "artifacts/kitchenowl-android-${SHORT_SHA}.apk"
-          mv artifacts/kitchenowl-ios-unsigned.tar.gz "artifacts/kitchenowl-ios-unsigned-${SHORT_SHA}.tar.gz"
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
+          mv artifacts/app-release.apk "artifacts/kitchenowl-android-${TIMESTAMP}-${SHORT_SHA}.apk"
+          mv artifacts/kitchenowl-ios-unsigned.tar.gz "artifacts/kitchenowl-ios-unsigned-${TIMESTAMP}-${SHORT_SHA}.tar.gz"
 
       - name: Create or update dev pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
           COMMIT_MSG=$(git log -1 --pretty=%s)
 
           # Delete existing dev release if present
@@ -134,7 +136,7 @@ jobs:
           # Create new pre-release
           gh release create dev \
             --prerelease \
-            --title "Dev Build (${SHORT_SHA})" \
+            --title "Dev Build (${TIMESTAMP} ${SHORT_SHA})" \
             --notes "$(cat <<EOF
           **Automated dev build from \`fork/main\`**
 
@@ -146,5 +148,5 @@ jobs:
           > Android APK must be sideloaded. iOS build is unsigned and requires re-signing.
           EOF
           )" \
-            artifacts/kitchenowl-android-${SHORT_SHA}.apk \
-            artifacts/kitchenowl-ios-unsigned-${SHORT_SHA}.tar.gz
+            artifacts/kitchenowl-android-${TIMESTAMP}-${SHORT_SHA}.apk \
+            artifacts/kitchenowl-ios-unsigned-${TIMESTAMP}-${SHORT_SHA}.tar.gz
