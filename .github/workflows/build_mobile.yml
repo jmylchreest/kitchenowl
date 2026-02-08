@@ -2,11 +2,11 @@ name: Build Mobile Apps
 
 on:
   push:
-    branches: [main]
+    branches: [fork/main]
     paths:
       - "kitchenowl/**"
   pull_request:
-    branches: [main]
+    branches: [fork/main]
     paths:
       - "kitchenowl/**"
   workflow_dispatch:
