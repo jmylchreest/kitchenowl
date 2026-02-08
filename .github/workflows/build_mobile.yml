@@ -95,7 +95,7 @@ jobs:
   release:
     name: Update dev pre-release
     needs: [build-android, build-ios]
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
