@@ -6,15 +6,23 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl_standalone.dart';
 // ignore: depend_on_referenced_packages
 import 'package:flutter_web_plugins/url_strategy.dart';
+import 'package:kitchenowl/config.dart';
 import 'package:kitchenowl/cubits/auth_cubit.dart';
 import 'package:kitchenowl/services/api/api_service.dart';
 import 'package:kitchenowl/services/background_task.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'app.dart';
 
 Future main() async {
   WidgetsFlutterBinding.ensureInitialized();
   usePathUrlStrategy();
   if (!kIsWeb) await findSystemLocale(); //BUG in package for web?
+
+  // Initialize packageInfo early to avoid race condition between
+  // AuthCubit and SettingsCubit — AuthCubit._refresh() needs the
+  // build number to check min_frontend_version compatibility.
+  Config.packageInfo = PackageInfo.fromPlatform();
+
   runApp(App());
 
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
