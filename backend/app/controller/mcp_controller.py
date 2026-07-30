@@ -10,7 +10,7 @@ from typing import Any, Callable
 from flask import Blueprint, Response, current_app, jsonify, request, url_for
 from flask_jwt_extended import current_user, jwt_required
 
-from app import db
+from app import db, socketio
 from app.config import BACKEND_VERSION
 from app.errors import (
     ForbiddenRequest,
@@ -107,6 +107,18 @@ def _recipe_summary(recipe: Recipe) -> dict[str, Any]:
     }
 
 
+def _emit(event: str, household_id: int, payload: dict[str, Any]):
+    socketio.emit(event, payload, to="household/" + str(household_id))
+
+
+def _emit_item(event: str, shoppinglist: Shoppinglist, con: ShoppinglistItems):
+    _emit(
+        event,
+        shoppinglist.household_id,
+        {"item": con.obj_to_item_dict(), "shoppinglist": shoppinglist.obj_to_dict()},
+    )
+
+
 def _require_household_access(household_id: int):
     member = HouseholdMember.find_by_ids(household_id, current_user.id)
     if not member:
@@ -159,6 +171,7 @@ def _tool_add_item_by_name(args: dict[str, Any]) -> Any:
         con.shoppinglist = shoppinglist
         con.save()
         History.create_added(shoppinglist, item, description)
+        _emit_item("shoppinglist_item:add", shoppinglist, con)
 
     return item.obj_to_dict()
 
@@ -303,6 +316,7 @@ def _tool_create_shoppinglist(args: dict[str, Any]) -> Any:
 
     shoppinglist = Shoppinglist(name=name, household_id=household_id)
     shoppinglist.save()
+    _emit("shoppinglist:add", household_id, {"shoppinglist": shoppinglist.obj_to_dict()})
     return shoppinglist.obj_to_dict()
 
 
@@ -317,7 +331,10 @@ def _tool_delete_shoppinglist(args: dict[str, Any]) -> Any:
         return {"deleted": False, "reason": "default_list"}
 
     name = shoppinglist.name
+    payload = {"shoppinglist": shoppinglist.obj_to_dict()}
+    household_id = shoppinglist.household_id
     shoppinglist.delete()
+    _emit("shoppinglist:delete", household_id, payload)
     return {"deleted": True, "id": list_id, "name": name}
 
 
@@ -343,7 +360,11 @@ def _tool_remove_item_from_list(args: dict[str, Any]) -> Any:
         return {"removed": False, "reason": "not_found"}
 
     removed_item = con.item.obj_to_dict()
+    item = con.item
+    description = con.description
     con.delete()
+    History.create_dropped(shoppinglist, item, description)
+    _emit_item("shoppinglist_item:remove", shoppinglist, con)
     return {"removed": True, "list_id": list_id, "item": removed_item}
 
 
