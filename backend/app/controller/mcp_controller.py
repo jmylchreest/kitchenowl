@@ -19,6 +19,7 @@ from app.errors import (
     UnauthorizedRequest,
 )
 from app.models import (
+    Category,
     History,
     Household,
     HouseholdMember,
@@ -34,6 +35,7 @@ from app.models import (
 )
 from app.models.recipe import RecipeVisibility
 from app.service.recipe_scraping import scrape
+from app.util import description_merger
 
 mcp = Blueprint("mcp", __name__)
 
@@ -149,31 +151,134 @@ def _tool_list_shoppinglist_items(args: dict[str, Any]) -> Any:
     return _paginate_query(query, args, lambda e: e.obj_to_item_dict())
 
 
-def _tool_add_item_by_name(args: dict[str, Any]) -> Any:
-    list_id = int(args["list_id"])
-    name = str(args["name"]).strip()
-    description = str(args.get("description", ""))
-
+def _authorized_shoppinglist(list_id: int) -> Shoppinglist:
     shoppinglist = Shoppinglist.find_by_id(list_id)
     if not shoppinglist:
         raise NotFoundRequest()
     shoppinglist.checkAuthorized()
+    return shoppinglist
 
+
+def _authorized_recipe(recipe_id: int) -> Recipe:
+    recipe = Recipe.find_by_id(recipe_id)
+    if not recipe:
+        raise NotFoundRequest()
+    recipe.checkAuthorized()
+    return recipe
+
+
+def _put_item_on_list(
+    shoppinglist: Shoppinglist, name: str, description: str, merge: bool
+) -> str:
+    """Add one item to a list. Returns 'added', 'merged' or 'unchanged'."""
     item = Item.find_by_name(shoppinglist.household_id, name)
     if not item:
         item = Item.create_by_name(shoppinglist.household_id, name)
 
     con = ShoppinglistItems.find_by_ids(shoppinglist.id, item.id)
-    if not con:
-        con = ShoppinglistItems(description=description)
-        con.created_by = current_user.id
-        con.item = item
-        con.shoppinglist = shoppinglist
+    if con:
+        if not merge or not description:
+            return "unchanged"
+        con.description = description_merger.merge(con.description, description)
         con.save()
-        History.create_added(shoppinglist, item, description)
+        History.create_added(shoppinglist, item, con.description)
         _emit_item("shoppinglist_item:add", shoppinglist, con)
+        return "merged"
 
-    return item.obj_to_dict()
+    con = ShoppinglistItems(description=description)
+    con.created_by = current_user.id
+    con.item = item
+    con.shoppinglist = shoppinglist
+    con.save()
+    History.create_added(shoppinglist, item, description)
+    _emit_item("shoppinglist_item:add", shoppinglist, con)
+    return "added"
+
+
+def _tool_add_item_by_name(args: dict[str, Any]) -> Any:
+    shoppinglist = _authorized_shoppinglist(int(args["list_id"]))
+    name = str(args["name"]).strip()
+    outcome = _put_item_on_list(
+        shoppinglist, name, str(args.get("description", "")), merge=False
+    )
+    item = Item.find_by_name(shoppinglist.household_id, name)
+    return {**item.obj_to_dict(), "outcome": outcome}
+
+
+def _tool_add_items(args: dict[str, Any]) -> Any:
+    shoppinglist = _authorized_shoppinglist(int(args["list_id"]))
+    merge = bool(args.get("merge_quantities", True))
+
+    results = []
+    for raw in args.get("items") or []:
+        if isinstance(raw, str):
+            name, description = raw.strip(), ""
+        else:
+            name = str(raw.get("name", "")).strip()
+            description = str(raw.get("description", ""))
+        if not name:
+            continue
+        results.append(
+            {
+                "name": name,
+                "outcome": _put_item_on_list(shoppinglist, name, description, merge),
+            }
+        )
+
+    return {"list_id": shoppinglist.id, "results": results}
+
+
+def _tool_add_recipe_items_to_list(args: dict[str, Any]) -> Any:
+    recipe = _authorized_recipe(int(args["recipe_id"]))
+    shoppinglist = _authorized_shoppinglist(int(args["list_id"]))
+    if recipe.household_id != shoppinglist.household_id:
+        raise InvalidUsage("Recipe and shopping list belong to different households")
+
+    include_optional = bool(args.get("include_optional", False))
+    wanted = {str(n).strip().lower() for n in (args.get("only_items") or [])}
+
+    results = []
+    for con in recipe.items:
+        if con.optional and not include_optional:
+            continue
+        if wanted and con.item.name.lower() not in wanted:
+            continue
+        results.append(
+            {
+                "name": con.item.name,
+                "outcome": _put_item_on_list(
+                    shoppinglist, con.item.name, con.description or "", merge=True
+                ),
+            }
+        )
+
+    return {
+        "recipe": {"id": recipe.id, "name": recipe.name},
+        "list_id": shoppinglist.id,
+        "results": results,
+    }
+
+
+def _tool_update_item_description(args: dict[str, Any]) -> Any:
+    shoppinglist = _authorized_shoppinglist(int(args["list_id"]))
+    name = str(args["name"]).strip()
+
+    item = Item.find_by_name(shoppinglist.household_id, name)
+    con = ShoppinglistItems.find_by_ids(shoppinglist.id, item.id) if item else None
+    if not con:
+        return {"updated": False, "reason": "not_on_list"}
+
+    con.description = str(args.get("description", ""))
+    con.save()
+    _emit_item("shoppinglist_item:add", shoppinglist, con)
+    return {"updated": True, **con.obj_to_item_dict()}
+
+
+def _tool_list_categories(args: dict[str, Any]) -> Any:
+    household_id = int(args["household_id"])
+    _require_household_access(household_id)
+    categories = Category.all_by_ordering(household_id)
+    return _paginate_list(list(categories), args, lambda c: c.obj_to_dict())
 
 
 def _tool_list_recipes(args: dict[str, Any]) -> Any:
@@ -743,6 +848,100 @@ TOOLS: dict[str, Tool] = {
             ("list_id", "name"),
         ),
         handler=_tool_add_item_by_name,
+        idempotent=True,
+    ),
+    "add_items": Tool(
+        title="Add several items to a shopping list",
+        description=(
+            "Put several items on a shopping list in one call. Prefer this over "
+            "repeated add_item_by_name. By default an item already on the list has its "
+            "quantity merged with the one you give, so asking for '1 l milk' twice "
+            "leaves '2 l' rather than a duplicate row."
+        ),
+        schema=_schema(
+            {
+                "list_id": P_LIST,
+                "items": {
+                    "type": "array",
+                    "description": "Items to add, as names or {name, description} objects.",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "Item name."},
+                                    "description": P_QUANTITY,
+                                },
+                                "required": ["name"],
+                            },
+                        ]
+                    },
+                },
+                "merge_quantities": {
+                    "type": "boolean",
+                    "description": "Merge quantities into items already listed. Default true.",
+                },
+            },
+            ("list_id", "items"),
+        ),
+        handler=_tool_add_items,
+    ),
+    "add_recipe_items_to_list": Tool(
+        title="Add a recipe's ingredients to a shopping list",
+        description=(
+            "Copy a recipe's ingredients onto a shopping list, merging quantities into "
+            "anything already there. This is the tool for turning a meal plan into a "
+            "shop. Optional ingredients are left out unless you ask for them, and the "
+            "recipe and list must belong to the same household."
+        ),
+        schema=_schema(
+            {
+                "recipe_id": P_RECIPE,
+                "list_id": P_LIST,
+                "include_optional": {
+                    "type": "boolean",
+                    "description": "Include ingredients marked optional. Default false.",
+                },
+                "only_items": {
+                    "type": "array",
+                    "description": "Only add these ingredient names, e.g. to skip what is in stock.",
+                    "items": {"type": "string"},
+                },
+            },
+            ("recipe_id", "list_id"),
+        ),
+        handler=_tool_add_recipe_items_to_list,
+    ),
+    "update_item_description": Tool(
+        title="Change an item's quantity",
+        description=(
+            "Replace the quantity text of an item already on a shopping list, e.g. to "
+            "correct '1 kg' to '500 g'. Use add_items if you want to add to the "
+            "existing quantity instead of overwriting it."
+        ),
+        schema=_schema(
+            {
+                "list_id": P_LIST,
+                "name": {"type": "string", "description": "Name of the item on the list."},
+                "description": P_QUANTITY,
+            },
+            ("list_id", "name"),
+        ),
+        handler=_tool_update_item_description,
+        destructive=True,
+        idempotent=True,
+    ),
+    "list_categories": Tool(
+        title="List categories",
+        description=(
+            "List a household's item categories in shop order, e.g. 'Produce' or "
+            "'Dairy'. Items carry a category_id, so this is how you group a shopping "
+            "list by aisle."
+        ),
+        schema=_schema(_paged({"household_id": P_HOUSEHOLD}), ("household_id",)),
+        handler=_tool_list_categories,
+        read_only=True,
         idempotent=True,
     ),
     "remove_item_from_list": Tool(
