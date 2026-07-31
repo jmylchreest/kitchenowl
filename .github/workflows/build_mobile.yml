@@ -33,20 +33,40 @@ jobs:
       - run: flutter packages get
         working-directory: kitchenowl
 
-      - name: Create temporary signing keystore
+      - name: Set up signing keystore
+        env:
+          FORK_KEYSTORE: ${{ secrets.FORK_KEYSTORE }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEYSTORE_KEY_ALIAS: ${{ secrets.FORK_KEYSTORE_KEY_ALIAS }}
         run: |
-          keytool -genkey -v \
-            -keystore app/ci-keystore.jks \
-            -keyalg RSA -keysize 2048 -validity 1 \
-            -alias ci \
-            -storepass changeit -keypass changeit \
-            -dname "CN=CI Build, O=KitchenOwl Fork, C=US"
-          cat > key.properties <<EOF
+          # Android refuses to update an app signed with a different key, so a
+          # keystore generated per run forces an uninstall, and the local data
+          # with it, on every build.
+          if [ -n "$FORK_KEYSTORE" ]; then
+            echo "$FORK_KEYSTORE" | base64 -d > app/fork-keystore.jks
+            ALIAS="${FORK_KEYSTORE_KEY_ALIAS:-fork}"
+            cat > key.properties <<EOF
+          storeFile=fork-keystore.jks
+          keyAlias=$ALIAS
+          storePassword=$FORK_KEYSTORE_PASSWORD
+          keyPassword=$FORK_KEYSTORE_PASSWORD
+          EOF
+            echo "Signed with the stored fork keystore; installs as an update."
+          else
+            keytool -genkey -v \
+              -keystore app/ci-keystore.jks \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias ci \
+              -storepass changeit -keypass changeit \
+              -dname "CN=CI Build, O=KitchenOwl Fork, C=US"
+            cat > key.properties <<EOF
           storeFile=ci-keystore.jks
           keyAlias=ci
           storePassword=changeit
           keyPassword=changeit
           EOF
+            echo "::warning::FORK_KEYSTORE is not set. This APK uses a throwaway key: it installs, but cannot upgrade a previous build."
+          fi
         working-directory: kitchenowl/android
 
       - name: Build APK

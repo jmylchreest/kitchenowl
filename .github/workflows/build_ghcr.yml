@@ -35,7 +35,14 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/beta-v* ]]; then
             echo "tags=${BASE}:beta,${BASE}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${BASE}:dev" >> "$GITHUB_OUTPUT"
+            # Branch builds get their own tag so testing a feature branch
+            # does not overwrite what fork/main last published.
+            SAFE_REF="${GITHUB_REF_NAME//\//-}"
+            if [ "$GITHUB_REF_NAME" = "fork/main" ]; then
+              echo "tags=${BASE}:dev" >> "$GITHUB_OUTPUT"
+            else
+              echo "tags=${BASE}:branch-${SAFE_REF}" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Log in to GHCR
@@ -80,7 +87,14 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/beta-v* ]]; then
             echo "tags=${BASE}:beta,${BASE}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${BASE}:dev" >> "$GITHUB_OUTPUT"
+            # Branch builds get their own tag so testing a feature branch
+            # does not overwrite what fork/main last published.
+            SAFE_REF="${GITHUB_REF_NAME//\//-}"
+            if [ "$GITHUB_REF_NAME" = "fork/main" ]; then
+              echo "tags=${BASE}:dev" >> "$GITHUB_OUTPUT"
+            else
+              echo "tags=${BASE}:branch-${SAFE_REF}" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Log in to GHCR
