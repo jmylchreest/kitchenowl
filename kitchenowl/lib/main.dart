@@ -25,7 +25,7 @@ Future main() async {
 
   runApp(App());
 
-  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+  if (!kIsWeb && (Platform.isAndroid)) {
     BackgroundFetch.registerHeadlessTask(backgroundFetchHeadlessTask);
   }
 }
