@@ -238,6 +238,27 @@ def _find_or_create_item(household_id: int, name: str) -> tuple[Item, bool, list
     return Item.create_by_name(household_id, name), True, similar
 
 
+def _find_or_create_tag(household_id: int, name: str) -> tuple[Tag, bool]:
+    tag = Tag.find_by_name(household_id, name)
+    if tag:
+        return tag, False
+    return Tag.create_by_name(household_id, name), True
+
+
+def _created_note(created_items: list[dict[str, Any]]) -> dict[str, Any]:
+    if not created_items:
+        return {}
+    note: dict[str, Any] = {"created_items": created_items}
+    if any(c.get("similar_existing") for c in created_items):
+        note["hint"] = (
+            "New household items were created. Where similar_existing names the "
+            "same product, use that item and put the variant in description. "
+            "Keep it separate where both would be bought at once, as plain and "
+            "self-raising flour would be."
+        )
+    return note
+
+
 def _put_item_on_list(
     shoppinglist: Shoppinglist, name: str, description: str, merge: bool
 ) -> dict[str, Any]:
@@ -268,7 +289,8 @@ def _put_item_on_list(
         result["hint"] = (
             "A new household item was created. If one of similar_existing is the "
             "same product, remove this one and use that item with the variant in "
-            "description instead."
+            "description instead. Keep it separate where both would be bought at "
+            "once, as plain and self-raising flour would be."
         )
     return result
 
@@ -399,6 +421,9 @@ def _tool_create_recipe(args: dict[str, Any]) -> Any:
 
     recipe.save()
 
+    created_items: list[dict[str, Any]] = []
+    created_tags: list[str] = []
+
     for recipe_item in (args.get("items") or []):
         if isinstance(recipe_item, str):
             item_name = recipe_item
@@ -412,9 +437,11 @@ def _tool_create_recipe(args: dict[str, Any]) -> Any:
         if not item_name:
             continue
 
-        item = Item.find_by_name(household_id, item_name)
-        if not item:
-            item = Item.create_by_name(household_id, item_name)
+        item, created, similar = _find_or_create_item(household_id, item_name)
+        if created:
+            created_items.append(
+                {"name": item.name, **({"similar_existing": similar} if similar else {})}
+            )
 
         con = RecipeItems(description=item_description, optional=item_optional)
         con.item = item
@@ -425,15 +452,18 @@ def _tool_create_recipe(args: dict[str, Any]) -> Any:
         name = str(tag_name).strip()
         if not name:
             continue
-        tag = Tag.find_by_name(household_id, name)
-        if not tag:
-            tag = Tag.create_by_name(household_id, name)
+        tag, tag_created = _find_or_create_tag(household_id, name)
+        if tag_created:
+            created_tags.append(tag.name)
         con = RecipeTags()
         con.tag = tag
         con.recipe = recipe
         con.save()
 
-    return recipe.obj_to_full_dict()
+    result = recipe.obj_to_full_dict() | _created_note(created_items)
+    if created_tags:
+        result["created_tags"] = created_tags
+    return result
 
 
 def _tool_get_recipe(args: dict[str, Any]) -> Any:
@@ -475,10 +505,8 @@ def _tool_create_tag(args: dict[str, Any]) -> Any:
     if not name:
         return {"created": False, "reason": "empty_name"}
 
-    tag = Tag.find_by_name(household_id, name)
-    if not tag:
-        tag = Tag.create_by_name(household_id, name)
-    return tag.obj_to_full_dict()
+    tag, created = _find_or_create_tag(household_id, name)
+    return tag.obj_to_full_dict() | {"created": created}
 
 
 def _tool_create_shoppinglist(args: dict[str, Any]) -> Any:
@@ -544,9 +572,12 @@ def _tool_add_recipe_item(args: dict[str, Any]) -> Any:
     if not item_name:
         return {"added": False, "reason": "empty_name"}
 
-    item = Item.find_by_name(recipe.household_id, item_name)
-    if not item:
-        item = Item.create_by_name(recipe.household_id, item_name)
+    item, was_created, similar = _find_or_create_item(recipe.household_id, item_name)
+    created = (
+        [{"name": item.name, **({"similar_existing": similar} if similar else {})}]
+        if was_created
+        else []
+    )
 
     con = RecipeItems.find_by_ids(recipe.id, item.id)
     if not con:
@@ -563,7 +594,7 @@ def _tool_add_recipe_item(args: dict[str, Any]) -> Any:
     con.item = item
     con.recipe = recipe
     con.save()
-    return recipe.obj_to_full_dict()
+    return recipe.obj_to_full_dict() | _created_note(created)
 
 
 def _tool_remove_recipe_item(args: dict[str, Any]) -> Any:
@@ -586,9 +617,7 @@ def _tool_add_recipe_tag(args: dict[str, Any]) -> Any:
     if not tag_name:
         return {"added": False, "reason": "empty_name"}
 
-    tag = Tag.find_by_name(recipe.household_id, tag_name)
-    if not tag:
-        tag = Tag.create_by_name(recipe.household_id, tag_name)
+    tag, tag_created = _find_or_create_tag(recipe.household_id, tag_name)
 
     con = RecipeTags.find_by_ids(recipe.id, tag.id)
     if not con:
@@ -597,7 +626,10 @@ def _tool_add_recipe_tag(args: dict[str, Any]) -> Any:
         con.recipe = recipe
         con.save()
 
-    return recipe.obj_to_full_dict()
+    result = recipe.obj_to_full_dict()
+    if tag_created:
+        result["created_tags"] = [tag.name]
+    return result
 
 
 def _tool_remove_recipe_tag(args: dict[str, Any]) -> Any:
@@ -816,7 +848,9 @@ P_QUANTITY = {
         "'500 g' or '3 x', but it is also where a variant or preparation note "
         "belongs, e.g. 'salted caramel' or 'finely chopped'. Put anything that "
         "describes this particular purchase here rather than in the name, so the "
-        "household keeps one item per product."
+        "household keeps one item per product. Where both variants would be "
+        "bought at once, though, they are separate items: one list row cannot "
+        "hold two quantities."
     ),
 }
 P_COOKING_DATE = {
@@ -1109,8 +1143,12 @@ TOOLS: dict[str, Tool] = {
         title="Create recipe",
         description=(
             "Create a recipe in a household. Ingredients may be given as plain names or "
-            "as objects carrying a quantity description and an optional flag; any that "
-            "are new to the household are created. Tags are created on demand too."
+            "as objects carrying a description and an optional flag.\n\n"
+            "Ingredient names that match no known item create one in the household, and "
+            "tags behave the same way. The result reports created_items and "
+            "created_tags, with the existing names each new item resembles. Prefer an "
+            "existing item with the variant in its description over a new near-"
+            "duplicate: check list_items for names you have not seen this session."
         ),
         schema=_schema(
             {
@@ -1170,9 +1208,12 @@ TOOLS: dict[str, Tool] = {
     "add_recipe_item": Tool(
         title="Add ingredient to recipe",
         description=(
-            "Add an ingredient to a recipe, creating the item in the household if "
-            "needed. Calling it for an ingredient already on the recipe updates that "
-            "ingredient's quantity and optional flag instead of duplicating it."
+            "Add an ingredient to a recipe. Calling it for an ingredient already on the "
+            "recipe updates that ingredient's description and optional flag instead of "
+            "duplicating it.\n\n"
+            "A name matching no known item creates one in the household, which is "
+            "durable and starts with no category, icon or history; the result then "
+            "reports created_items with the existing names it resembles."
         ),
         schema=_schema(
             {
@@ -1202,7 +1243,11 @@ TOOLS: dict[str, Tool] = {
     ),
     "list_tags": Tool(
         title="List tags",
-        description="List a household's recipe tags, e.g. 'vegetarian' or 'quick'.",
+        description=(
+            "List a household's recipe tags, e.g. 'vegetarian' or 'quick'. Call this "
+            "before tagging with a name you are unsure of, so you reuse a tag rather "
+            "than creating a near-duplicate of it."
+        ),
         schema=_schema(_paged({"household_id": P_HOUSEHOLD}), ("household_id",)),
         handler=_tool_list_tags,
         read_only=True,
@@ -1212,7 +1257,7 @@ TOOLS: dict[str, Tool] = {
         title="Create tag",
         description=(
             "Create a recipe tag in a household. Returns the existing tag if one with "
-            "that name is already there."
+            "that name is already there, with created telling you which happened."
         ),
         schema=_schema(
             {
@@ -1226,7 +1271,11 @@ TOOLS: dict[str, Tool] = {
     ),
     "add_recipe_tag": Tool(
         title="Tag a recipe",
-        description="Attach a tag to a recipe, creating the tag in the household if needed.",
+        description=(
+            "Attach a tag to a recipe. A tag name that does not exist yet is created in "
+            "the household and reported as created_tags, so check list_tags first if "
+            "you are guessing at a name."
+        ),
         schema=_schema(
             {
                 "recipe_id": P_RECIPE,
@@ -1378,7 +1427,13 @@ SERVER_INSTRUCTIONS = (
     "variant in its description: 'Ice cream' described as 'salted caramel', not a "
     "new 'Salted caramel ice cream'. Search list_items before adding something you "
     "have not seen in this session. Tools report outcome 'created' when they had "
-    "to mint a new item, along with the existing names it resembles."
+    "to mint a new item, along with the existing names it resembles.\n\n"
+    "Things bought separately are separate items, though. A shopping list holds "
+    "one row per item, so two variants of one item merge into a single row and "
+    "their quantities add up: plain and self-raising flour on one 'Flour' item "
+    "becomes an unshoppable '1500g, plain, self raising'. Ask whether both would "
+    "go in the trolley at once. If they would, they are separate items; if you "
+    "are only choosing which one to buy, use one item and describe the variant."
 )
 
 SSE_KEEPALIVE_SECONDS = 15
