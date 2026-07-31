@@ -25,6 +25,7 @@ from app.models import (
     HouseholdMember,
     Item,
     Recipe,
+    RecipeHistory,
     RecipeItems,
     RecipeTags,
     Shoppinglist,
@@ -746,6 +747,7 @@ def _tool_add_planner_entry(args: dict[str, Any]) -> Any:
         yields=int(args.get("yields", 1)),
     )
     plan.save()
+    RecipeHistory.create_added(recipe, household_id)
     return plan.obj_to_full_dict()
 
 
@@ -763,7 +765,9 @@ def _tool_remove_planner_entry(args: dict[str, Any]) -> Any:
     if not plan:
         return {"removed": False, "reason": "not_found"}
 
+    recipe = plan.recipe
     plan.delete()
+    RecipeHistory.create_dropped(recipe, household_id)
     return {"removed": True, "household_id": household_id, "recipe_id": recipe_id, "cooking_date": cooking_date}
 
 
