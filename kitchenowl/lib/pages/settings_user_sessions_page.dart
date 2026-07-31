@@ -133,45 +133,40 @@ class SettingsUserSessionsPage extends StatelessWidget {
       showCancel: false,
       confirmText: AppLocalizations.of(context)!.done,
       title: Text(AppLocalizations.of(context)!.lltNotShownAgain),
-      content: Row(
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: SelectableText(token),
+          SelectableText(token),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Builder(builder: (context) {
+                return IconButton(
+                  tooltip: AppLocalizations.of(context)!.share,
+                  onPressed: () => SharePlus.instance.share(
+                    ShareParams(text: token),
+                  ),
+                  icon: const Icon(Icons.ios_share_rounded),
+                );
+              }),
+              Builder(builder: (context) {
+                return IconButton(
+                  tooltip: AppLocalizations.of(context)!.copied,
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: token));
+                    Navigator.of(context).pop();
+                    showSnackbar(
+                      context: context,
+                      content: Text(AppLocalizations.of(context)!.copied),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded),
+                );
+              }),
+            ],
           ),
-          Builder(builder: (context) {
-            return IconButton(
-              tooltip: AppLocalizations.of(context)!.share,
-              onPressed: () => SharePlus.instance.share(
-                ShareParams(text: token),
-              ),
-              icon: const Icon(Icons.ios_share_rounded),
-            );
-          }),
-          Builder(builder: (context) {
-            return IconButton(
-              tooltip: AppLocalizations.of(context)!.copied,
-              onPressed: () {
-                Clipboard.setData(
-                  ClipboardData(
-                    text: token,
-                  ),
-                );
-                Navigator.of(context).pop();
-                showSnackbar(
-                  context: context,
-                  content: Text(
-                    AppLocalizations.of(
-                      context,
-                    )!
-                        .copied,
-                  ),
-                );
-              },
-              icon: const Icon(
-                Icons.copy_rounded,
-              ),
-            );
-          }),
         ],
       ),
     );
