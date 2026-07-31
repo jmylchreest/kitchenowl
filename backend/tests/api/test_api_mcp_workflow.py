@@ -218,3 +218,62 @@ def test_an_unrelated_name_reports_no_lookalikes(user_client_with_household, lis
     )["results"][0]
     assert result["outcome"] == "created"
     assert "similar_existing" not in result
+
+
+def test_two_recipes_sharing_an_item_accumulate(
+    user_client_with_household, household_id, list_id
+):
+    def recipe(name, flour, extra):
+        return _structured(
+            user_client_with_household,
+            "create_recipe",
+            {
+                "household_id": household_id,
+                "name": name,
+                "items": [
+                    {"name": "flour", "description": flour},
+                    {"name": extra, "description": "1 x"},
+                ],
+            },
+        )["id"]
+
+    bread = recipe("Bread", "200 g", "yeast")
+    cake = recipe("Cake", "300 g", "sugar")
+
+    for r in (bread, cake):
+        _structured(
+            user_client_with_household,
+            "add_recipe_items_to_list",
+            {"recipe_id": r, "list_id": list_id},
+        )
+
+    names = _names_on(user_client_with_household, list_id)
+    # One row for flour carrying the total, not two rows or the last value.
+    assert names["flour"] == "500g"
+    assert set(names) == {"flour", "yeast", "sugar"}
+
+
+def test_quantities_that_cannot_convert_are_kept_side_by_side(
+    user_client_with_household, household_id, list_id
+):
+    def recipe(name, tomato_qty):
+        return _structured(
+            user_client_with_household,
+            "create_recipe",
+            {
+                "household_id": household_id,
+                "name": name,
+                "items": [{"name": "tomatoes", "description": tomato_qty}],
+            },
+        )["id"]
+
+    for r in (recipe("Soup", "400 g"), recipe("Sauce", "2 tins")):
+        _structured(
+            user_client_with_household,
+            "add_recipe_items_to_list",
+            {"recipe_id": r, "list_id": list_id},
+        )
+
+    # Grams and tins have no conversion, so both are shown rather than one
+    # silently winning or a bogus total being invented.
+    assert _names_on(user_client_with_household, list_id)["tomatoes"] == "400g, 2 tins"
