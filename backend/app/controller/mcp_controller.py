@@ -107,6 +107,7 @@ def _recipe_summary(recipe: Recipe) -> dict[str, Any]:
         "prep_time": recipe.prep_time,
         "yields": recipe.yields,
         "tags": [t.tag.name for t in recipe.tags],
+        "suggestion_score": recipe.suggestion_score,
     }
 
 
@@ -773,6 +774,28 @@ def _tool_list_planner(args: dict[str, Any]) -> Any:
     return _paginate_list(plans, args, lambda p: p.obj_to_full_dict())
 
 
+def _tool_suggest_recipes(args: dict[str, Any]) -> Any:
+    household_id = int(args["household_id"])
+    _require_household_access(household_id)
+    page = max(int(args.get("page", 0)), 0)
+
+    recipes = Recipe.find_suggestions(household_id, page)
+    result: dict[str, Any] = {
+        "items": [_recipe_summary(r) for r in recipes],
+        "page": page,
+        "has_more": len(recipes) == 10,
+    }
+    if not recipes and page == 0:
+        # An empty ranking is not an empty household, and the difference
+        # matters: without it the model concludes there is nothing to cook.
+        result["reason"] = (
+            "No ranking available. Suggestions are computed nightly from cooked "
+            "recipe history, so a household that has not cooked from its recipes "
+            "yet has none. Use list_recipes instead."
+        )
+    return result
+
+
 def _tool_scrape_recipe(args: dict[str, Any]) -> Any:
     household_id = int(args["household_id"])
     url = str(args["url"]).strip()
@@ -844,11 +867,8 @@ P_RECIPE = {"type": "integer", "description": "Recipe id, as returned by list_re
 P_QUANTITY = {
     "type": "string",
     "description": (
-        "Free text shown next to the item. Usually a quantity such as '2 kg', "
-        "'500 g' or '3 x', but it is also where a variant or preparation note "
-        "belongs, e.g. 'salted caramel' or 'finely chopped'. Put anything that "
-        "describes this particular purchase here rather than in the name, so the "
-        "household keeps one item per product."
+        "Free text next to the item: a quantity like '2 kg' or '3 x', or a variant "
+        "like 'salted caramel'. Variants belong here, not in the name."
     ),
 }
 P_COOKING_DATE = {
@@ -1126,6 +1146,29 @@ TOOLS: dict[str, Tool] = {
             ("household_id", "query"),
         ),
         handler=_tool_search_recipes,
+        read_only=True,
+        idempotent=True,
+    ),
+    "suggest_recipes": Tool(
+        title="Suggest recipes from history",
+        description=(
+            "Recipes this household actually cooks, ranked from the last six "
+            "months and excluding anything already on the planner. Start here when "
+            "asked to plan meals, so the plan follows what gets eaten rather than "
+            "guesswork. Falls back with a reason when no ranking exists yet."
+        ),
+        schema=_schema(
+            {
+                "household_id": P_HOUSEHOLD,
+                "page": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Page of ten, 0 for the first.",
+                },
+            },
+            ("household_id",),
+        ),
+        handler=_tool_suggest_recipes,
         read_only=True,
         idempotent=True,
     ),
