@@ -233,6 +233,7 @@ def _put_item_on_list(
 
     con = ShoppinglistItems(description=description)
     con.created_by = current_user.id
+    con.created_by_token_name = Token.current_llt_name()
     con.item = item
     con.shoppinglist = shoppinglist
     con.save()

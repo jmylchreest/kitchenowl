@@ -5,7 +5,12 @@ from typing import Any, Optional, Self, Tuple, List, TYPE_CHECKING, cast
 from app import db
 from app.config import JWT_REFRESH_TOKEN_EXPIRES, JWT_ACCESS_TOKEN_EXPIRES
 from app.errors import UnauthorizedRequest, getClientIp
-from flask_jwt_extended import create_access_token, create_refresh_token, get_jti
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    get_jti,
+    get_jwt,
+)
 from app.models.user import User
 from sqlalchemy.orm import Mapped
 
@@ -84,6 +89,17 @@ class Token(Model):
     @classmethod
     def find_by_jti(cls, jti: str) -> Self | None:
         return cls.query.filter(cls.jti == jti).first()
+
+    @classmethod
+    def current_llt_name(cls) -> str | None:
+        try:
+            jti = get_jwt().get("jti")
+        except RuntimeError:
+            return None
+        if not jti:
+            return None
+        token = cls.find_by_jti(jti)
+        return token.name if token and token.type == "llt" else None
 
     @classmethod
     def delete_expired_refresh(cls):
