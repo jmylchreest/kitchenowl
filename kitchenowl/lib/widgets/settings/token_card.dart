@@ -16,20 +16,30 @@ class TokenCard extends StatelessWidget {
     this.enableOnTap = true,
   });
 
+  String? _scopeLabel(BuildContext context) => switch (token.scope) {
+        'read' => AppLocalizations.of(context)!.lltScopeRead,
+        'write' => AppLocalizations.of(context)!.lltScopeWrite,
+        'full' => AppLocalizations.of(context)!.lltScopeFull,
+        _ => null,
+      };
+
   @override
   Widget build(BuildContext context) {
+    final lastUsed = token.lastUsedAt ?? token.createdAt;
+    final details = [
+      if (lastUsed != null)
+        "${AppLocalizations.of(context)!.lastUsed}: ${DateFormat.yMMMEd().add_jm().format(lastUsed)}",
+      if (_scopeLabel(context) != null)
+        "${AppLocalizations.of(context)!.lltScope}: ${_scopeLabel(context)}",
+    ];
+
     final child = Card(
       child: ListTile(
         title: Text(
           token.name,
         ),
-        subtitle: (token.lastUsedAt ?? token.createdAt) != null
-            ? Text(
-                "${AppLocalizations.of(context)!.lastUsed}: ${DateFormat.yMMMEd().add_jm().format(
-                      token.lastUsedAt ?? token.createdAt!,
-                    )}",
-              )
-            : null,
+        subtitle: details.isNotEmpty ? Text(details.join('\n')) : null,
+        isThreeLine: details.length > 1,
         onTap: enableOnTap
             ? () => showModalBottomSheet(
                   context: context,

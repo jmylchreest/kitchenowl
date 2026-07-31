@@ -4,7 +4,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:kitchenowl/cubits/settings_user_cubit.dart';
 import 'package:kitchenowl/enums/token_type_enum.dart';
 import 'package:kitchenowl/kitchenowl.dart';
+import 'package:kitchenowl/widgets/settings/llt_create_dialog.dart';
 import 'package:kitchenowl/widgets/settings/token_card.dart';
+import 'package:share_plus/share_plus.dart';
 
 class SettingsUserSessionsPage extends StatelessWidget {
   final SettingsUserCubit cubit;
@@ -112,20 +114,17 @@ class SettingsUserSessionsPage extends StatelessWidget {
     );
     if (!confirm) return;
 
-    final name = await showDialog<String>(
+    final request = await showDialog<LltRequest>(
       context: context,
-      builder: (BuildContext context) {
-        return TextDialog(
-          title: AppLocalizations.of(context)!.lltCreate,
-          doneText: AppLocalizations.of(context)!.add,
-          hintText: AppLocalizations.of(context)!.name,
-          isInputValid: (s) => s.isNotEmpty,
-        );
-      },
+      builder: (BuildContext context) => const LltCreateDialog(),
     );
-    if (name == null) return;
+    if (request == null) return;
 
-    final token = await cubit.addLongLivedToken(name);
+    final token = await cubit.addLongLivedToken(
+      request.name,
+      scope: request.scope,
+      householdId: request.householdId,
+    );
 
     if (token == null || token.isEmpty) return;
 
@@ -141,6 +140,16 @@ class SettingsUserSessionsPage extends StatelessWidget {
           ),
           Builder(builder: (context) {
             return IconButton(
+              tooltip: AppLocalizations.of(context)!.share,
+              onPressed: () => SharePlus.instance.share(
+                ShareParams(text: token),
+              ),
+              icon: const Icon(Icons.ios_share_rounded),
+            );
+          }),
+          Builder(builder: (context) {
+            return IconButton(
+              tooltip: AppLocalizations.of(context)!.copied,
               onPressed: () {
                 Clipboard.setData(
                   ClipboardData(

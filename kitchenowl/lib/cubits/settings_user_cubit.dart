@@ -84,8 +84,16 @@ class SettingsUserCubit extends Cubit<SettingsUserState> {
     emit(state.copyWith(image: image));
   }
 
-  Future<String?> addLongLivedToken(String name) async {
-    final token = await ApiService.getInstance().createLongLivedToken(name);
+  Future<String?> addLongLivedToken(
+    String name, {
+    String? scope,
+    int? householdId,
+  }) async {
+    final token = await ApiService.getInstance().createLongLivedToken(
+      name,
+      scope: scope,
+      householdId: householdId,
+    );
     if (token != null) refresh();
 
     return token;

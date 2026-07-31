@@ -472,8 +472,19 @@ class ApiService {
     return null;
   }
 
-  Future<String?> createLongLivedToken(String name) async {
-    final res = await post('/auth/llt', jsonEncode({'device': name}));
+  Future<String?> createLongLivedToken(
+    String name, {
+    String? scope,
+    int? householdId,
+  }) async {
+    final res = await post(
+      '/auth/llt',
+      jsonEncode({
+        'device': name,
+        if (scope != null) 'scope': scope,
+        if (householdId != null) 'household_id': householdId,
+      }),
+    );
     if (res.statusCode == 200) {
       final body = jsonDecode(res.body);
 

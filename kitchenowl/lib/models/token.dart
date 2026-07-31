@@ -7,6 +7,8 @@ class Token extends Model {
   final DateTime? createdAt;
   final DateTime? lastUsedAt;
   final TokenTypeEnum type;
+  final String? scope;
+  final int? householdId;
 
   const Token({
     required this.id,
@@ -14,6 +16,8 @@ class Token extends Model {
     required this.type,
     this.createdAt,
     this.lastUsedAt,
+    this.scope,
+    this.householdId,
   });
 
   factory Token.fromJson(Map<String, dynamic> map) {
@@ -46,6 +50,8 @@ class Token extends Model {
       type: type,
       createdAt: createdAt,
       lastUsedAt: lastUsedAt,
+      scope: map['scope'],
+      householdId: map['household_id'],
     );
   }
 
@@ -58,10 +64,13 @@ class Token extends Model {
         type: type,
         createdAt: createdAt,
         lastUsedAt: lastUsedAt,
+        scope: scope,
+        householdId: householdId,
       );
 
   @override
-  List<Object?> get props => [id, name, type, createdAt, lastUsedAt];
+  List<Object?> get props =>
+      [id, name, type, createdAt, lastUsedAt, scope, householdId];
 
   @override
   String toString() {
