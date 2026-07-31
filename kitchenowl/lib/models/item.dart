@@ -154,6 +154,7 @@ class ItemWithDescription extends Item {
 
 class ShoppinglistItem extends ItemWithDescription {
   final int? createdById;
+  final String? createdByTokenName;
   final DateTime? createdAt;
 
   const ShoppinglistItem({
@@ -166,6 +167,7 @@ class ShoppinglistItem extends ItemWithDescription {
     super.defaultKey,
     super.isDefault,
     this.createdById,
+    this.createdByTokenName,
     this.createdAt,
   });
 
@@ -185,6 +187,7 @@ class ShoppinglistItem extends ItemWithDescription {
               .toLocal()
           : null,
       createdById: map['created_by'],
+      createdByTokenName: map['created_by_token'],
     );
   }
 
@@ -196,6 +199,7 @@ class ShoppinglistItem extends ItemWithDescription {
     String? description,
     DateTime? createdAt,
     int? createdById,
+    String? createdByTokenName,
   }) =>
       ShoppinglistItem(
         id: item.id,
@@ -209,6 +213,7 @@ class ShoppinglistItem extends ItemWithDescription {
         defaultKey: item.defaultKey,
         createdAt: createdAt ?? DateTime.now(),
         createdById: createdById,
+        createdByTokenName: createdByTokenName,
       );
 
   @override
@@ -227,16 +232,21 @@ class ShoppinglistItem extends ItemWithDescription {
         ordering: ordering,
         isDefault: isDefault,
         defaultKey: defaultKey,
+        createdById: createdById,
+        createdByTokenName: createdByTokenName,
+        createdAt: createdAt,
       );
 
   @override
-  List<Object?> get props => super.props + [createdAt, createdById];
+  List<Object?> get props =>
+      super.props + [createdAt, createdById, createdByTokenName];
 
   @override
   Map<String, dynamic> toJsonWithId() => super.toJsonWithId()
     ..addAll({
       "created_at": createdAt?.toUtc().millisecondsSinceEpoch,
       "created_by": createdById,
+      "created_by_token": createdByTokenName,
     });
 }
 
