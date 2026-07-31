@@ -8,6 +8,7 @@ from app.models import (
     Status,
     Association,
     ShoppinglistItems,
+    Token,
 )
 from app.helpers import validate_args, authorize_household
 from .schemas import (
@@ -169,6 +170,7 @@ def updateItemDescription(args, id: int, item_id: int):
         con.shoppinglist = shoppinglist_obj
         con.item = item
         con.created_by = current_user.id
+        con.created_by_token_name = Token.current_llt_name()
 
     con.description = args["description"] or ""
     resolver.set_updated_at(con, client_timestamp)
@@ -332,6 +334,7 @@ def addShoppinglistItemByName(args, id):
         description = args["description"] if "description" in args else ""
         con = ShoppinglistItems(description=description)
         con.created_by = current_user.id
+        con.created_by_token_name = Token.current_llt_name()
         con.item = item
         con.shoppinglist = shoppinglist
         con.save()
@@ -454,6 +457,7 @@ def addRecipeItems(args, id):
                 else:
                     con = ShoppinglistItems(description=description)
                     con.created_by = current_user.id
+                    con.created_by_token_name = Token.current_llt_name()
                     con.item = item
                     con.shoppinglist = shoppinglist
                     db.session.add(con)

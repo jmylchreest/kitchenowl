@@ -5,7 +5,12 @@ from typing import Any, Optional, Self, Tuple, List, TYPE_CHECKING, cast
 from app import db
 from app.config import JWT_REFRESH_TOKEN_EXPIRES, JWT_ACCESS_TOKEN_EXPIRES
 from app.errors import UnauthorizedRequest, getClientIp
-from flask_jwt_extended import create_access_token, create_refresh_token, get_jti
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    get_jti,
+    get_jwt,
+)
 from app.models.user import User
 from sqlalchemy.orm import Mapped
 
@@ -24,6 +29,14 @@ class Token(Model):
     type: Mapped[str] = db.Column(db.String(16), nullable=False)
     name: Mapped[str] = db.Column(db.String(), nullable=False)
     last_used_at: Mapped[datetime | None] = db.Column(db.DateTime)
+    # None means unrestricted.
+    scope: Mapped[str | None] = db.Column(db.String(16), nullable=True)
+    household_id: Mapped[int | None] = db.Column(
+        db.Integer,
+        db.ForeignKey("household.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     refresh_token_id: Mapped[Optional[int]] = db.Column(
         db.Integer,
         db.ForeignKey("token.id"),
@@ -76,6 +89,17 @@ class Token(Model):
     @classmethod
     def find_by_jti(cls, jti: str) -> Self | None:
         return cls.query.filter(cls.jti == jti).first()
+
+    @classmethod
+    def current_llt_name(cls) -> str | None:
+        try:
+            jti = get_jwt().get("jti")
+        except RuntimeError:
+            return None
+        if not jti:
+            return None
+        token = cls.find_by_jti(jti)
+        return token.name if token and token.type == "llt" else None
 
     @classmethod
     def delete_expired_refresh(cls):
@@ -213,12 +237,20 @@ class Token(Model):
         return refreshToken, model
 
     @classmethod
-    def create_longlived_token(cls, user: User, device: str) -> Tuple[str, Self]:
+    def create_longlived_token(
+        cls,
+        user: User,
+        device: str,
+        scope: str | None = None,
+        household_id: int | None = None,
+    ) -> Tuple[str, Self]:
         accesssToken = create_access_token(identity=user, expires_delta=False)
         model = cls()
         model.jti = cast(str, get_jti(accesssToken))
         model.type = "llt"
         model.name = device
         model.user = user
+        model.scope = scope
+        model.household_id = household_id
         model.save()
         return accesssToken, model

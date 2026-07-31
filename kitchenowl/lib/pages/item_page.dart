@@ -60,6 +60,21 @@ class _ItemPageState<T extends Item> extends State<ItemPage<T>> {
     super.dispose();
   }
 
+  String _addedByLabel(BuildContext context) {
+    final item = widget.item as ShoppinglistItem;
+    final member = context
+        .read<HouseholdCubit>()
+        .state
+        .household
+        .member
+        ?.firstWhereOrNull((e) => e.id == item.createdById);
+    final who = member?.name ?? AppLocalizations.of(context)!.other;
+    final token = item.createdByTokenName;
+
+    return AppLocalizations.of(context)!
+        .addedBy(token != null ? "$who ($token)" : who);
+  }
+
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<ItemEditCubit, ItemEditState>(
@@ -223,22 +238,7 @@ class _ItemPageState<T extends Item> extends State<ItemPage<T>> {
                             if (widget.item is ShoppinglistItem)
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  AppLocalizations.of(context)!.addedBy(context
-                                          .read<HouseholdCubit>()
-                                          .state
-                                          .household
-                                          .member
-                                          ?.firstWhereOrNull(
-                                            (e) =>
-                                                e.id ==
-                                                (widget.item
-                                                        as ShoppinglistItem)
-                                                    .createdById,
-                                          )
-                                          ?.name ??
-                                      AppLocalizations.of(context)!.other),
-                                ),
+                                title: Text(_addedByLabel(context)),
                                 trailing: (widget.item as ShoppinglistItem)
                                             .createdAt !=
                                         null

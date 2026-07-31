@@ -69,6 +69,9 @@ class ShoppinglistItems(Model):
     created_by: Mapped[int | None] = db.Column(
         db.Integer, db.ForeignKey("user.id"), nullable=True
     )
+    created_by_token_name: Mapped[str | None] = db.Column(
+        db.String(255), nullable=True
+    )
 
     item: Mapped["Item"] = cast(
         Mapped["Item"],
@@ -99,6 +102,7 @@ class ShoppinglistItems(Model):
         res["created_at"] = getattr(self, "created_at")
         res["updated_at"] = getattr(self, "updated_at")
         res["created_by"] = getattr(self, "created_by")
+        res["created_by_token"] = getattr(self, "created_by_token_name")
         return res
 
     @classmethod

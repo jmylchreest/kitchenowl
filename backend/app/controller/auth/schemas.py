@@ -1,4 +1,4 @@
-from marshmallow import fields, Schema
+from marshmallow import fields, Schema, validate
 
 from app.config import EMAIL_MANDATORY
 
@@ -43,6 +43,16 @@ class CreateLongLivedToken(Schema):
     device = fields.String(
         required=True,
         validate=lambda a: a and not a.isspace(),
+        load_only=True,
+    )
+    scope = fields.String(
+        required=False,
+        validate=validate.OneOf(["read", "write", "full"]),
+        load_only=True,
+    )
+    household_id = fields.Integer(
+        required=False,
+        validate=validate.Range(min=1),
         load_only=True,
     )
 
