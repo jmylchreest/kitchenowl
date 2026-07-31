@@ -1307,9 +1307,9 @@ TOOLS: dict[str, Tool] = {
     "scrape_recipe": Tool(
         title="Import recipe from a URL",
         description=(
-            "Fetch a recipe from a web page and return it parsed, without saving it. "
-            "Review the result and pass it to create_recipe to keep it. Fails on sites "
-            "that publish no recognisable recipe data."
+            "Fetch a recipe from a web page and return it parsed. Nothing is saved, so "
+            "keeping it is a separate step. Fails on sites that publish no "
+            "recognisable recipe data."
         ),
         schema=_schema(
             {
