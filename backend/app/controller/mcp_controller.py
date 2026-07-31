@@ -7,8 +7,8 @@ from datetime import datetime
 from queue import Empty, Queue
 from typing import Any, Callable
 
-from flask import Blueprint, Response, current_app, jsonify, request, url_for
-from flask_jwt_extended import current_user, jwt_required
+from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
+from flask_jwt_extended import current_user, get_jwt, jwt_required
 
 from app import db, socketio
 from app.config import BACKEND_VERSION
@@ -29,6 +29,7 @@ from app.models import (
     RecipeTags,
     Shoppinglist,
     ShoppinglistItems,
+    Token,
     Expense,
     Planner,
     Tag,
@@ -109,6 +110,39 @@ def _recipe_summary(recipe: Recipe) -> dict[str, Any]:
     }
 
 
+def _current_token() -> Token | None:
+    # Keyed on the jti rather than cached outright, so a second token in the
+    # same app context is never answered from the first one's entry.
+    jti = get_jwt().get("jti")
+    if not jti:
+        return None
+    if g.get("mcp_token_jti") != jti:
+        g.mcp_token_jti = jti
+        g.mcp_token = Token.find_by_jti(jti)
+    return g.mcp_token
+
+
+def _tool_permitted(tool: Tool) -> bool:
+    token = _current_token()
+    scope = token.scope if token else None
+    if scope == "read":
+        return tool.read_only
+    if scope == "write":
+        return not tool.deletes
+    return True
+
+
+def _permitted_tools() -> dict[str, Tool]:
+    return {name: tool for name, tool in TOOLS.items() if _tool_permitted(tool)}
+
+
+def _check_household_pin(household_id: int):
+    token = _current_token()
+    pinned = token.household_id if token else None
+    if pinned is not None and pinned != household_id:
+        raise ForbiddenRequest("This token is restricted to a different household")
+
+
 def _emit(event: str, household_id: int, payload: dict[str, Any]):
     socketio.emit(event, payload, to="household/" + str(household_id))
 
@@ -125,10 +159,14 @@ def _require_household_access(household_id: int):
     member = HouseholdMember.find_by_ids(household_id, current_user.id)
     if not member:
         raise NotFoundRequest()
+    _check_household_pin(household_id)
 
 
 def _tool_list_households(args: dict[str, Any]) -> Any:
     members = HouseholdMember.find_by_user(current_user.id)
+    token = _current_token()
+    if token and token.household_id is not None:
+        members = [m for m in members if m.household_id == token.household_id]
     return _paginate_list(members, args, lambda m: m.household.obj_to_dict())
 
 
@@ -141,10 +179,7 @@ def _tool_list_shoppinglists(args: dict[str, Any]) -> Any:
 
 def _tool_list_shoppinglist_items(args: dict[str, Any]) -> Any:
     list_id = int(args["list_id"])
-    shoppinglist = Shoppinglist.find_by_id(list_id)
-    if not shoppinglist:
-        raise NotFoundRequest()
-    shoppinglist.checkAuthorized()
+    shoppinglist = _authorized_shoppinglist(list_id)
     query = ShoppinglistItems.query.filter(
         ShoppinglistItems.shoppinglist_id == list_id
     ).join(ShoppinglistItems.item)
@@ -156,6 +191,7 @@ def _authorized_shoppinglist(list_id: int) -> Shoppinglist:
     if not shoppinglist:
         raise NotFoundRequest()
     shoppinglist.checkAuthorized()
+    _check_household_pin(shoppinglist.household_id)
     return shoppinglist
 
 
@@ -164,7 +200,17 @@ def _authorized_recipe(recipe_id: int) -> Recipe:
     if not recipe:
         raise NotFoundRequest()
     recipe.checkAuthorized()
+    _check_household_pin(recipe.household_id)
     return recipe
+
+
+def _authorized_expense(expense_id: int) -> Expense:
+    expense = Expense.find_by_id(expense_id)
+    if not expense:
+        raise NotFoundRequest()
+    expense.checkAuthorized()
+    _check_household_pin(expense.household_id)
+    return expense
 
 
 def _put_item_on_list(
@@ -363,19 +409,13 @@ def _tool_create_recipe(args: dict[str, Any]) -> Any:
 
 def _tool_get_recipe(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
     return recipe.obj_to_full_dict()
 
 
 def _tool_delete_recipe(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
     name = recipe.name
     recipe.delete()
     return {"deleted": True, "id": recipe_id, "name": name}
@@ -427,10 +467,7 @@ def _tool_create_shoppinglist(args: dict[str, Any]) -> Any:
 
 def _tool_delete_shoppinglist(args: dict[str, Any]) -> Any:
     list_id = int(args["list_id"])
-    shoppinglist = Shoppinglist.find_by_id(list_id)
-    if not shoppinglist:
-        raise NotFoundRequest()
-    shoppinglist.checkAuthorized()
+    shoppinglist = _authorized_shoppinglist(list_id)
 
     if shoppinglist.isDefault():
         return {"deleted": False, "reason": "default_list"}
@@ -445,10 +482,7 @@ def _tool_delete_shoppinglist(args: dict[str, Any]) -> Any:
 
 def _tool_remove_item_from_list(args: dict[str, Any]) -> Any:
     list_id = int(args["list_id"])
-    shoppinglist = Shoppinglist.find_by_id(list_id)
-    if not shoppinglist:
-        raise NotFoundRequest()
-    shoppinglist.checkAuthorized()
+    shoppinglist = _authorized_shoppinglist(list_id)
 
     item_id = args.get("item_id")
     item_name = str(args.get("name", "")).strip()
@@ -475,10 +509,7 @@ def _tool_remove_item_from_list(args: dict[str, Any]) -> Any:
 
 def _tool_add_recipe_item(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
 
     item_name = str(args["name"]).strip()
     if not item_name:
@@ -509,10 +540,7 @@ def _tool_add_recipe_item(args: dict[str, Any]) -> Any:
 def _tool_remove_recipe_item(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
     item_id = int(args["item_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
 
     con = RecipeItems.find_by_ids(recipe_id, item_id)
     if not con:
@@ -523,10 +551,7 @@ def _tool_remove_recipe_item(args: dict[str, Any]) -> Any:
 
 def _tool_add_recipe_tag(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
 
     tag_name = str(args["name"]).strip()
     if not tag_name:
@@ -548,10 +573,7 @@ def _tool_add_recipe_tag(args: dict[str, Any]) -> Any:
 
 def _tool_remove_recipe_tag(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
 
     tag_id = args.get("tag_id")
     tag_name = str(args.get("name", "")).strip()
@@ -573,10 +595,7 @@ def _tool_remove_recipe_tag(args: dict[str, Any]) -> Any:
 
 def _tool_update_recipe(args: dict[str, Any]) -> Any:
     recipe_id = int(args["recipe_id"])
-    recipe = Recipe.find_by_id(recipe_id)
-    if not recipe:
-        raise NotFoundRequest()
-    recipe.checkAuthorized()
+    recipe = _authorized_recipe(recipe_id)
 
     if "name" in args:
         recipe.name = str(args["name"]).strip()[:128]
@@ -633,10 +652,7 @@ def _tool_create_expense(args: dict[str, Any]) -> Any:
 
 def _tool_delete_expense(args: dict[str, Any]) -> Any:
     expense_id = int(args["expense_id"])
-    expense = Expense.find_by_id(expense_id)
-    if not expense:
-        raise NotFoundRequest()
-    expense.checkAuthorized()
+    expense = _authorized_expense(expense_id)
     name = expense.name
     expense.delete()
     return {"deleted": True, "id": expense_id, "name": name}
@@ -721,6 +737,8 @@ class Tool:
     destructive: bool = False
     idempotent: bool = False
     open_world: bool = False
+    # Destroys a durable object, not just an entry in a collection.
+    deletes: bool = False
 
     def annotations(self) -> dict[str, Any]:
         return {
@@ -984,6 +1002,7 @@ TOOLS: dict[str, Tool] = {
         schema=_schema({"list_id": P_LIST}, ("list_id",)),
         handler=_tool_delete_shoppinglist,
         destructive=True,
+        deletes=True,
     ),
     "list_items": Tool(
         title="List known items",
@@ -1106,6 +1125,7 @@ TOOLS: dict[str, Tool] = {
         schema=_schema({"recipe_id": P_RECIPE}, ("recipe_id",)),
         handler=_tool_delete_recipe,
         destructive=True,
+        deletes=True,
     ),
     "add_recipe_item": Tool(
         title="Add ingredient to recipe",
@@ -1282,6 +1302,7 @@ TOOLS: dict[str, Tool] = {
         ),
         handler=_tool_delete_expense,
         destructive=True,
+        deletes=True,
     ),
     "scrape_recipe": Tool(
         title="Import recipe from a URL",
@@ -1365,7 +1386,7 @@ def _dispatch(body: Any) -> Any:
                         "inputSchema": tool.schema,
                         "annotations": tool.annotations(),
                     }
-                    for name, tool in TOOLS.items()
+                    for name, tool in _permitted_tools().items()
                 ]
             }
         elif method == "tools/call":
@@ -1374,6 +1395,14 @@ def _dispatch(body: Any) -> Any:
             if name not in TOOLS:
                 return None if is_notification else _rpc_error(
                     id_value, -32602, f"Unknown tool: {name}"
+                )
+            if not _tool_permitted(TOOLS[name]):
+                return None if is_notification else _rpc_ok(
+                    id_value,
+                    _as_tool_error(
+                        f"This token's scope does not permit {name}. Mint a token with a "
+                        "wider scope if you need it."
+                    ),
                 )
             try:
                 result = _as_tool_result(TOOLS[name].handler(args))
@@ -1396,6 +1425,10 @@ def _dispatch(body: Any) -> Any:
 
 def _rpc_error(id_value: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": id_value, "error": {"code": code, "message": message}}
+
+
+def _rpc_ok(id_value: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": id_value, "result": result}
 
 
 # Streamable HTTP. Stateless: no session id is issued, so this transport keeps
