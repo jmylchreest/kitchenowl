@@ -24,6 +24,14 @@ class TokenBottomSheet extends StatelessWidget {
           ),
           const Divider(),
           Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              AppLocalizations.of(context)!.lltNotRetrievable,
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: ElevatedButton(
               onPressed: onLogout,

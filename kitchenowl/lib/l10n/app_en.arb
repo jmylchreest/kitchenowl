@@ -247,6 +247,7 @@
     }
   },
   "@lltNotShownAgain": {},
+  "@lltNotRetrievable": {},
   "@lltWarningContent": {},
   "@lltWarningTitle": {},
   "@llts": {},
@@ -657,6 +658,7 @@
   "lltScopeWrite": "Read and write",
   "lltScopeWriteDescription": "Can add and update, but not delete recipes, lists or expenses.",
   "lltDeleteConfirmation": "Are you sure you want to delete long-lived token '{token}'? This cannot be undone.",
+  "lltNotRetrievable": "The token is only shown when it is created and cannot be retrieved later.",
   "lltNotShownAgain": "Save the token; you won't be able to see it again",
   "lltWarningContent": "Are you sure you want to create a long-lived token? This could potentially be a security risk. The token does not expire, and acts as you within the access you give it.",
   "lltWarningTitle": "Do you know what you're doing?",
