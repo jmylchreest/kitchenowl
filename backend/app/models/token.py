@@ -24,6 +24,14 @@ class Token(Model):
     type: Mapped[str] = db.Column(db.String(16), nullable=False)
     name: Mapped[str] = db.Column(db.String(), nullable=False)
     last_used_at: Mapped[datetime | None] = db.Column(db.DateTime)
+    # None means unrestricted.
+    scope: Mapped[str | None] = db.Column(db.String(16), nullable=True)
+    household_id: Mapped[int | None] = db.Column(
+        db.Integer,
+        db.ForeignKey("household.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     refresh_token_id: Mapped[Optional[int]] = db.Column(
         db.Integer,
         db.ForeignKey("token.id"),
@@ -213,12 +221,20 @@ class Token(Model):
         return refreshToken, model
 
     @classmethod
-    def create_longlived_token(cls, user: User, device: str) -> Tuple[str, Self]:
+    def create_longlived_token(
+        cls,
+        user: User,
+        device: str,
+        scope: str | None = None,
+        household_id: int | None = None,
+    ) -> Tuple[str, Self]:
         accesssToken = create_access_token(identity=user, expires_delta=False)
         model = cls()
         model.jti = cast(str, get_jti(accesssToken))
         model.type = "llt"
         model.name = device
         model.user = user
+        model.scope = scope
+        model.household_id = household_id
         model.save()
         return accesssToken, model

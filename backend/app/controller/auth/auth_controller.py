@@ -8,7 +8,14 @@ from oic.oauth2.message import ErrorResponse
 from app.helpers import validate_args
 from flask import jsonify, Blueprint
 from flask_jwt_extended import current_user, jwt_required, get_jwt
-from app.models import User, Token, OIDCLink, OIDCRequest, ChallengeMailVerify
+from app.models import (
+    User,
+    Token,
+    OIDCLink,
+    OIDCRequest,
+    ChallengeMailVerify,
+    HouseholdMember,
+)
 from app.errors import NotFoundRequest, UnauthorizedRequest, getClientIp
 from app.service import mail
 from app.service.file_has_access_or_download import file_has_access_or_download
@@ -326,7 +333,13 @@ def createLongLivedToken(args):
     if not user:
         raise UnauthorizedRequest(message="Unauthorized: IP {}".format(getClientIp()))
 
-    llToken, _ = Token.create_longlived_token(user, args["device"])
+    household_id = args.get("household_id")
+    if household_id is not None and not HouseholdMember.find_by_ids(household_id, user.id):
+        raise NotFoundRequest()
+
+    llToken, _ = Token.create_longlived_token(
+        user, args["device"], args.get("scope"), household_id
+    )
 
     return jsonify({"longlived_token": llToken})
 
