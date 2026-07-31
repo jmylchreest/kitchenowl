@@ -213,23 +213,45 @@ def _authorized_expense(expense_id: int) -> Expense:
     return expense
 
 
+def _similar_item_names(household_id: int, name: str, limit: int = 5) -> list[str]:
+    """Existing items whose name contains, or is contained by, the given one."""
+    lowered = name.strip().lower()
+    if not lowered:
+        return []
+    rows = db.session.query(Item.name).filter(Item.household_id == household_id).all()
+    similar = [
+        existing
+        for (existing,) in rows
+        if existing.lower() != lowered
+        and (existing.lower() in lowered or lowered in existing.lower())
+    ]
+    return sorted(similar, key=len)[:limit]
+
+
+def _find_or_create_item(household_id: int, name: str) -> tuple[Item, bool, list[str]]:
+    """Resolve a name to an item, reporting whether it had to be created and
+    which existing names a created one resembles."""
+    item = Item.find_by_name(household_id, name)
+    if item:
+        return item, False, []
+    similar = _similar_item_names(household_id, name)
+    return Item.create_by_name(household_id, name), True, similar
+
+
 def _put_item_on_list(
     shoppinglist: Shoppinglist, name: str, description: str, merge: bool
-) -> str:
-    """Add one item to a list. Returns 'added', 'merged' or 'unchanged'."""
-    item = Item.find_by_name(shoppinglist.household_id, name)
-    if not item:
-        item = Item.create_by_name(shoppinglist.household_id, name)
+) -> dict[str, Any]:
+    item, created, similar = _find_or_create_item(shoppinglist.household_id, name)
 
     con = ShoppinglistItems.find_by_ids(shoppinglist.id, item.id)
-    if con:
+    if con and not created:
         if not merge or not description:
-            return "unchanged"
+            return {"outcome": "unchanged"}
         con.description = description_merger.merge(con.description, description)
         con.save()
         History.create_added(shoppinglist, item, con.description)
         _emit_item("shoppinglist_item:add", shoppinglist, con)
-        return "merged"
+        return {"outcome": "merged", "description": con.description}
 
     con = ShoppinglistItems(description=description)
     con.created_by = current_user.id
@@ -239,17 +261,26 @@ def _put_item_on_list(
     con.save()
     History.create_added(shoppinglist, item, description)
     _emit_item("shoppinglist_item:add", shoppinglist, con)
-    return "added"
+
+    result: dict[str, Any] = {"outcome": "created" if created else "added"}
+    if similar:
+        result["similar_existing"] = similar
+        result["hint"] = (
+            "A new household item was created. If one of similar_existing is the "
+            "same product, remove this one and use that item with the variant in "
+            "description instead."
+        )
+    return result
 
 
 def _tool_add_item_by_name(args: dict[str, Any]) -> Any:
     shoppinglist = _authorized_shoppinglist(int(args["list_id"]))
     name = str(args["name"]).strip()
-    outcome = _put_item_on_list(
+    result = _put_item_on_list(
         shoppinglist, name, str(args.get("description", "")), merge=False
     )
     item = Item.find_by_name(shoppinglist.household_id, name)
-    return {**item.obj_to_dict(), "outcome": outcome}
+    return {**item.obj_to_dict(), **result}
 
 
 def _tool_add_items(args: dict[str, Any]) -> Any:
@@ -266,10 +297,7 @@ def _tool_add_items(args: dict[str, Any]) -> Any:
         if not name:
             continue
         results.append(
-            {
-                "name": name,
-                "outcome": _put_item_on_list(shoppinglist, name, description, merge),
-            }
+            {"name": name, **_put_item_on_list(shoppinglist, name, description, merge)}
         )
 
     return {"list_id": shoppinglist.id, "results": results}
@@ -293,7 +321,7 @@ def _tool_add_recipe_items_to_list(args: dict[str, Any]) -> Any:
         results.append(
             {
                 "name": con.item.name,
-                "outcome": _put_item_on_list(
+                **_put_item_on_list(
                     shoppinglist, con.item.name, con.description or "", merge=True
                 ),
             }
@@ -784,8 +812,11 @@ P_RECIPE = {"type": "integer", "description": "Recipe id, as returned by list_re
 P_QUANTITY = {
     "type": "string",
     "description": (
-        "Free-text quantity shown next to the item, e.g. '2 kg', '500 g', '3 x'. "
-        "Leave empty if no quantity is needed."
+        "Free text shown next to the item. Usually a quantity such as '2 kg', "
+        "'500 g' or '3 x', but it is also where a variant or preparation note "
+        "belongs, e.g. 'salted caramel' or 'finely chopped'. Put anything that "
+        "describes this particular purchase here rather than in the name, so the "
+        "household keeps one item per product."
     ),
 }
 P_COOKING_DATE = {
@@ -851,9 +882,11 @@ TOOLS: dict[str, Tool] = {
     "add_item_by_name": Tool(
         title="Add item to shopping list",
         description=(
-            "Put an item on a shopping list, creating it in the household if it is not "
-            "already known. Adding an item that is already on the list changes nothing, "
-            "so this is safe to retry."
+            "Put an item on a shopping list. A name that matches no known item creates "
+            "one in the household, which is durable and starts with no category, icon "
+            "or history, so the result reports outcome 'created' rather than 'added'. "
+            "Adding an item already on the list changes nothing, so this is safe to "
+            "retry."
         ),
         schema=_schema(
             {
@@ -875,7 +908,11 @@ TOOLS: dict[str, Tool] = {
             "Put several items on a shopping list in one call. Prefer this over "
             "repeated add_item_by_name. By default an item already on the list has its "
             "quantity merged with the one you give, so asking for '1 l milk' twice "
-            "leaves '2 l' rather than a duplicate row."
+            "leaves '2 l' rather than a duplicate row.\n\n"
+            "Names that do not match a known item create one in the household, which "
+            "is durable and starts with no category, icon or history. Each result "
+            "reports outcome 'added' or 'created', and a created one lists the "
+            "existing names it resembles so you can correct it."
         ),
         schema=_schema(
             {
@@ -1009,8 +1046,10 @@ TOOLS: dict[str, Tool] = {
         title="List known items",
         description=(
             "List the items a household knows about, whether or not they are on a list "
-            "right now. Useful for matching a vague request to an existing item instead "
-            "of creating a near-duplicate."
+            "right now. Call this before adding anything whose name you have not seen "
+            "in this session: matching an existing item keeps its category, icon and "
+            "history, which a near-duplicate would lose. Use the search filter on a "
+            "distinctive word, e.g. 'cream' rather than 'salted caramel ice cream'."
         ),
         schema=_schema(
             _paged(
@@ -1332,7 +1371,14 @@ LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 SERVER_INSTRUCTIONS = (
     "KitchenOwl manages households, each of which owns shopping lists, items, "
     "recipes, tags, meal plans and expenses. Nearly every tool is scoped to a "
-    "household, so call list_households first and reuse the id you get back."
+    "household, so call list_households first and reuse the id you get back.\n\n"
+    "A household keeps one item per product, and each item carries a category, an "
+    "icon and the history the suggestion features learn from. Naming a variant as "
+    "a new item throws all of that away, so prefer an existing item with the "
+    "variant in its description: 'Ice cream' described as 'salted caramel', not a "
+    "new 'Salted caramel ice cream'. Search list_items before adding something you "
+    "have not seen in this session. Tools report outcome 'created' when they had "
+    "to mint a new item, along with the existing names it resembles."
 )
 
 SSE_KEEPALIVE_SECONDS = 15
