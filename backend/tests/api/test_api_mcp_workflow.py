@@ -58,7 +58,8 @@ def test_add_items_adds_a_batch(user_client_with_household, list_id):
         "add_items",
         {"list_id": list_id, "items": ["milk", {"name": "bread", "description": "1 x"}]},
     )
-    assert [r["outcome"] for r in result["results"]] == ["added", "added"]
+    # Neither name is known to a fresh household, so both mint an item.
+    assert [r["outcome"] for r in result["results"]] == ["created", "created"]
     assert _names_on(user_client_with_household, list_id) == {"milk": "", "bread": "1 x"}
 
 
@@ -172,3 +173,107 @@ def test_recipe_and_list_must_share_a_household(
         {"recipe_id": recipe_id, "list_id": other_list},
     )
     assert result["isError"] is True
+
+
+def test_a_known_item_is_reused_rather_than_created(user_client_with_household, list_id):
+    args = {"list_id": list_id, "items": ["milk"]}
+    assert _structured(user_client_with_household, "add_items", args)["results"][0][
+        "outcome"
+    ] == "created"
+
+    _structured(
+        user_client_with_household,
+        "remove_item_from_list",
+        {"list_id": list_id, "name": "milk"},
+    )
+    # The item survives removal, so putting it back is a reuse, not a creation.
+    again = _structured(user_client_with_household, "add_items", args)
+    assert again["results"][0]["outcome"] == "added"
+    assert "similar_existing" not in again["results"][0]
+
+
+def test_creating_a_near_duplicate_names_what_it_resembles(
+    user_client_with_household, list_id
+):
+    _structured(user_client_with_household, "add_items", {"list_id": list_id, "items": ["Ice cream"]})
+
+    result = _structured(
+        user_client_with_household,
+        "add_items",
+        {"list_id": list_id, "items": ["Salted caramel ice cream"]},
+    )["results"][0]
+
+    # The model needs to see that it invented a product, and what it resembles,
+    # otherwise the household quietly accumulates near-duplicates.
+    assert result["outcome"] == "created"
+    assert "Ice cream" in result["similar_existing"]
+    assert "description" in result["hint"]
+
+
+def test_an_unrelated_name_reports_no_lookalikes(user_client_with_household, list_id):
+    result = _structured(
+        user_client_with_household,
+        "add_items",
+        {"list_id": list_id, "items": ["Dishwasher tablets"]},
+    )["results"][0]
+    assert result["outcome"] == "created"
+    assert "similar_existing" not in result
+
+
+def test_two_recipes_sharing_an_item_accumulate(
+    user_client_with_household, household_id, list_id
+):
+    def recipe(name, flour, extra):
+        return _structured(
+            user_client_with_household,
+            "create_recipe",
+            {
+                "household_id": household_id,
+                "name": name,
+                "items": [
+                    {"name": "flour", "description": flour},
+                    {"name": extra, "description": "1 x"},
+                ],
+            },
+        )["id"]
+
+    bread = recipe("Bread", "200 g", "yeast")
+    cake = recipe("Cake", "300 g", "sugar")
+
+    for r in (bread, cake):
+        _structured(
+            user_client_with_household,
+            "add_recipe_items_to_list",
+            {"recipe_id": r, "list_id": list_id},
+        )
+
+    names = _names_on(user_client_with_household, list_id)
+    # One row for flour carrying the total, not two rows or the last value.
+    assert names["flour"] == "500g"
+    assert set(names) == {"flour", "yeast", "sugar"}
+
+
+def test_quantities_that_cannot_convert_are_kept_side_by_side(
+    user_client_with_household, household_id, list_id
+):
+    def recipe(name, tomato_qty):
+        return _structured(
+            user_client_with_household,
+            "create_recipe",
+            {
+                "household_id": household_id,
+                "name": name,
+                "items": [{"name": "tomatoes", "description": tomato_qty}],
+            },
+        )["id"]
+
+    for r in (recipe("Soup", "400 g"), recipe("Sauce", "2 tins")):
+        _structured(
+            user_client_with_household,
+            "add_recipe_items_to_list",
+            {"recipe_id": r, "list_id": list_id},
+        )
+
+    # Grams and tins have no conversion, so both are shown rather than one
+    # silently winning or a bogus total being invented.
+    assert _names_on(user_client_with_household, list_id)["tomatoes"] == "400g, 2 tins"
