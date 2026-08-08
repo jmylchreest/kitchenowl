@@ -315,22 +315,30 @@ class TransactionShoppingListUpdateItem extends Transaction<bool> {
   Future<bool> runLocal() async {
     final shoppingLists =
         await MemStorage.getInstance().readShoppingLists(household) ?? [];
-    final latestShoppingList =
-        shoppingLists.where((e) => e.id == shoppinglist.id).firstOrNull;
-    if (latestShoppingList == null) return false;
+    final listIndex =
+        shoppingLists.indexWhere((e) => e.id == shoppinglist.id);
+    if (listIndex < 0) return false;
+    final latestShoppingList = shoppingLists[listIndex];
 
     if (item is ShoppinglistItem) {
       final int i = latestShoppingList.items.indexWhere((e) => e.id == item.id);
-      latestShoppingList.items[i] =
+      if (i < 0) return false;
+      final updatedItems = List.of(latestShoppingList.items);
+      updatedItems[i] =
           (item as ShoppinglistItem).copyWith(description: description);
+      shoppingLists[listIndex] =
+          latestShoppingList.copyWith(items: updatedItems);
       MemStorage.getInstance().writeShoppingLists(household, shoppingLists);
 
       return true;
     } else if (description.isNotEmpty) {
-      latestShoppingList.items
+      final updatedItems = List.of(latestShoppingList.items);
+      updatedItems
           .add(ShoppinglistItem(name: item.name, description: description));
-      latestShoppingList.recentItems
-          .removeWhere((item) => item.name == this.item.name);
+      final updatedRecent = List.of(latestShoppingList.recentItems);
+      updatedRecent.removeWhere((item) => item.name == this.item.name);
+      shoppingLists[listIndex] = latestShoppingList.copyWith(
+          items: updatedItems, recentItems: updatedRecent);
       MemStorage.getInstance().writeShoppingLists(household, shoppingLists);
 
       return true;
